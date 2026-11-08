@@ -18,6 +18,7 @@ from mmwave.dataloader.ti_uart import (
     TI_TLV_RANGE_PROFILE_MAJOR,
     TIUARTStreamParser,
 )
+from mmwave.dsp.environment_map import ReflectionMap
 
 
 def build_parser():
@@ -34,7 +35,7 @@ def build_parser():
     )
     parser.add_argument("--command-timeout", type=float, default=2.0)
     parser.add_argument(
-        "--view", choices=("points", "range", "both", "depth", "depth3d", "all"),
+        "--view", choices=("points", "range", "both", "depth", "depth3d", "map", "scene", "all"),
         default="both",
     )
     parser.add_argument("--limit", type=float, default=5.0, help="point-cloud axis limit in metres")
@@ -56,6 +57,9 @@ def build_parser():
     )
     parser.add_argument("--interval", type=int, default=50, help="UI refresh interval in ms")
     parser.add_argument("--record", type=Path, help="also save received bytes to this file")
+    parser.add_argument("--map-history", type=float, default=30.0, help="map evidence time constant in seconds")
+    parser.add_argument("--map-threshold", type=float, default=6.0, help="peak contrast above median background in dB")
+    parser.add_argument("--fps", type=float, default=4.0, help="configured radar FPS, used for map aging")
     return parser
 
 
@@ -144,15 +148,37 @@ class LiveViewer:
 
         show_points = args.view in ("points", "both", "all")
         show_range = args.view in ("range", "both", "all")
-        show_depth = args.view in ("depth", "depth3d", "all")
-        show_3d = args.view in ("depth3d", "all")
-        panel_count = sum((show_points, show_range, show_depth, show_3d))
+        show_depth = args.view in ("depth", "depth3d", "scene", "all")
+        show_3d = args.view in ("depth3d", "scene", "all")
+        show_map = args.view in ("map", "scene", "all")
+        panel_count = sum((show_points, show_range, show_depth, show_3d, show_map))
         self.figure = plt.figure(figsize=(6 * panel_count, 6))
         panel = iter(range(1, panel_count + 1))
         self.point_axis = self.figure.add_subplot(1, panel_count, next(panel)) if show_points else None
         self.range_axis = self.figure.add_subplot(1, panel_count, next(panel)) if show_range else None
         self.depth_axis = self.figure.add_subplot(1, panel_count, next(panel)) if show_depth else None
         self.cloud_axis = self.figure.add_subplot(1, panel_count, next(panel), projection="3d") if show_3d else None
+        self.map_axis = self.figure.add_subplot(1, panel_count, next(panel)) if show_map else None
+        self.environment = None
+        self.map_image = None
+        if show_map:
+            self.environment = ReflectionMap(
+                limit=args.limit, max_range=args.max_range,
+                range_step=args.range_resolution, fps=args.fps,
+                history=args.map_history, threshold_db=args.map_threshold,
+            )
+            cmap = plt.get_cmap("inferno").copy()
+            cmap.set_bad("#343a40")
+            self.map_image = self.map_axis.imshow(
+                np.ma.masked_all(self.environment.evidence.shape), origin="lower",
+                extent=(-args.limit, args.limit, 0, args.max_range),
+                cmap=cmap, vmin=0, vmax=1, aspect="equal", interpolation="nearest",
+            )
+            self.map_axis.plot(0, 0, "c^", markersize=9)
+            self.map_axis.set(xlabel="x / lateral (m)", ylabel="y / forward (m)",
+                title="Accumulated reflection map\nGray = unknown; R = clear")
+            self.figure.colorbar(self.map_image, ax=self.map_axis, pad=0.02).set_label("Reflection persistence (not occupancy probability)")
+            self.figure.canvas.mpl_connect("key_press_event", self.map_key)
         self.cloud_scatter = None
         if self.cloud_axis is not None:
             self.cloud_scatter = self.cloud_axis.scatter(
@@ -276,7 +302,7 @@ class LiveViewer:
         return tuple(
             artist for artist in (
                 self.scatter, self.range_line, self.depth_image,
-                self.depth_line, self.cloud_scatter, self.status,
+                self.depth_line, self.cloud_scatter, self.map_image, self.status,
             )
             if artist is not None
         )
@@ -284,6 +310,13 @@ class LiveViewer:
     def update_frame(self, frame):
         self.frames_received += 1
         self.last_frame = frame.header.frame_number
+
+        if self.environment is not None and frame.payloads(TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR):
+            evidence = self.environment.update(
+                frame.range_azimuth_heatmap(self.args.azimuth_bins),
+                frame.header.frame_number, self.args.min_range,
+            )
+            self.map_image.set_data(np.ma.masked_less(evidence, 0.15))
 
         if self.cloud_scatter is not None:
             if frame.payloads(TI_TLV_DETECTED_POINTS):
@@ -353,6 +386,12 @@ class LiveViewer:
             angles = np.degrees(np.arcsin(spatial_frequency))
             self.depth_line.set_data(angles, depth)
 
+    def map_key(self, event):
+        if event.key in ("r", "R") and self.environment is not None:
+            self.environment.clear()
+            self.map_image.set_data(np.ma.masked_all(self.environment.evidence.shape))
+            self.figure.canvas.draw_idle()
+
     def close(self, _event=None):
         self.stop_reader.set()
         self.reader.join(timeout=1.0)
@@ -372,6 +411,8 @@ def main():
     args = build_parser().parse_args()
     if args.limit <= 0:
         raise SystemExit("--limit must be positive")
+    if args.fps <= 0 or args.map_history <= 0:
+        raise SystemExit("--fps and --map-history must be positive")
     if args.azimuth_bins <= 0:
         raise SystemExit("--azimuth-bins must be positive")
     if args.range_resolution <= 0:
