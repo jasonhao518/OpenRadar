@@ -4,6 +4,7 @@ Input is the unshifted TI range-azimuth power matrix. This is a horizontal
 projection, not an elevation-resolved floor plan or calibrated occupancy.
 """
 import numpy as np
+from collections import deque
 
 
 class ReflectionMap:
@@ -23,11 +24,15 @@ class ReflectionMap:
         self.evidence = np.zeros_like(xx)
         self.current = np.zeros_like(xx, dtype=bool)
         self.last_frame = None
+        self.frames = deque()
+        self.hit_counts = np.zeros_like(xx, dtype=np.int32)
 
     def clear(self):
         self.evidence.fill(0)
         self.current.fill(False)
         self.last_frame = None
+        self.frames.clear()
+        self.hit_counts.fill(0)
 
     def update(self, heatmap, frame_number, min_range=0.25):
         power = np.fft.fftshift(np.asarray(heatmap, dtype=float), axes=1)
@@ -49,9 +54,15 @@ class ReflectionMap:
         valid = ((ri < nr) & (ai >= 0) & (ai < na)
                  & (self.ranges >= min_range) & (np.abs(self.sines) <= np.sin(np.radians(60))))
         self.current = valid & peaks[np.clip(ri, 0, nr-1), np.clip(ai, 0, na-1)]
-        delta = 1 if self.last_frame is None else max(1, int(frame_number)-self.last_frame)
-        decay = np.exp(-min(delta / self.fps, self.history) / self.history)
-        self.evidence *= decay
-        self.evidence += (1-decay) * self.current
+        if self.last_frame is not None and int(frame_number) <= self.last_frame:
+            self.frames.clear()
+            self.hit_counts.fill(0)
+        timestamp = int(frame_number) / self.fps
+        self.frames.append((timestamp, self.current.copy()))
+        self.hit_counts += self.current
+        while self.frames and self.frames[0][0] <= timestamp - self.history:
+            _, expired = self.frames.popleft()
+            self.hit_counts -= expired
+        self.evidence[:] = self.hit_counts / len(self.frames)
         self.last_frame = int(frame_number)
         return self.evidence

@@ -57,7 +57,7 @@ def build_parser():
     )
     parser.add_argument("--interval", type=int, default=50, help="UI refresh interval in ms")
     parser.add_argument("--record", type=Path, help="also save received bytes to this file")
-    parser.add_argument("--map-history", type=float, default=30.0, help="map evidence time constant in seconds")
+    parser.add_argument("--map-history", type=float, default=30.0, help="sliding map history window in seconds")
     parser.add_argument("--map-threshold", type=float, default=6.0, help="peak contrast above median background in dB")
     parser.add_argument("--fps", type=float, default=4.0, help="configured radar FPS, used for map aging")
     return parser

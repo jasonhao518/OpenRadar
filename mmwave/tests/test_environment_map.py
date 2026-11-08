@@ -10,6 +10,18 @@ spec.loader.exec_module(module)
 
 
 class MapTest(unittest.TestCase):
+    def test_window_expires_old_returns_exactly(self):
+        mapper = module.ReflectionMap(history=30, fps=4)
+        power = np.ones((64, 32))*100
+        power[10, 0] = 10000
+        mapper.update(power, 1)
+        self.assertGreater(mapper.evidence.max(), 0)
+        mapper.update(np.ones((64, 32))*100, 120)
+        self.assertGreater(mapper.evidence.max(), 0)
+        mapper.update(np.ones((64, 32))*100, 121)
+        self.assertEqual(mapper.evidence.max(), 0)
+        self.assertEqual(len(mapper.frames), 2)
+
     def test_static_return_accumulates_then_fades(self):
         mapper = module.ReflectionMap(history=2, fps=4)
         power = np.ones((64, 32)) * 100
