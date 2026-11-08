@@ -242,6 +242,7 @@ class TIUARTStreamParser:
 
     def __init__(self):
         self._buffer = bytearray()
+        self.malformed_packets = 0
 
     @property
     def buffered_bytes(self) -> int:
@@ -274,8 +275,13 @@ class TIUARTStreamParser:
             if len(self._buffer) < total_length:
                 break
             packet = bytes(self._buffer[:total_length])
+            try:
+                parsed = load_ti_uart_frames(packet, strict=True)
+            except ValueError:
+                self.malformed_packets += 1
+                del self._buffer[0]
+                continue
             del self._buffer[:total_length]
-            parsed = load_ti_uart_frames(packet, strict=True)
             if len(parsed) != 1:
                 raise ValueError("complete serial packet did not decode to one frame")
             frames.append(parsed[0])

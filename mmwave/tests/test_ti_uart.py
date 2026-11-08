@@ -111,6 +111,17 @@ class TIUARTTest(unittest.TestCase):
         self.assertEqual([frame.header.frame_number for frame in decoded], [21, 22])
         self.assertEqual(parser.buffered_bytes, 0)
 
+    def test_stream_recovers_after_malformed_tlv(self):
+        damaged = bytearray(make_packet(30, [(302, b"\0" * 4)]))
+        # Corrupt the TLV length, leaving the outer packet length intact.
+        import struct
+        struct.pack_into("<I", damaged, TI_UART_HEADER.size + 4, 100000)
+        good = make_packet(31, [(302, b"\1\0\0\0")])
+        parser = TIUARTStreamParser()
+        frames = parser.feed(damaged + good)
+        self.assertEqual([f.header.frame_number for f in frames], [31])
+        self.assertEqual(parser.malformed_packets, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,8 @@
 
 import argparse
 import time
+import queue
+import threading
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -133,6 +135,12 @@ class LiveViewer:
         self.frames_received = 0
         self.last_frame = None
         self.error = None
+        self.skipped_payloads = 0
+        self.pending = queue.Queue()
+        self.stop_reader = threading.Event()
+        self.serial.timeout = 0.05
+        self.reader = threading.Thread(target=self.receive, daemon=True)
+        self.reader.start()
 
         show_points = args.view in ("points", "both", "all")
         show_range = args.view in ("range", "both", "all")
@@ -207,25 +215,42 @@ class LiveViewer:
         if self.error:
             return "Serial error: {}".format(self.error)
         frame = "waiting" if self.last_frame is None else str(self.last_frame)
-        return "{} @ {:,} baud  |  frame {}  |  {:,} bytes  |  {:,} packets".format(
+        return "{} @ {:,} baud  |  frame {}  |  {:,} bytes  |  {:,} packets | skipped {}".format(
             self.args.port,
             self.serial.baudrate,
             frame,
             self.bytes_received,
             self.frames_received,
+            self.parser.malformed_packets + self.skipped_payloads,
         )
+
+    def receive(self):
+        """Drain the OS serial buffer even while Matplotlib is drawing."""
+        try:
+            while not self.stop_reader.is_set():
+                chunk = self.serial.read(min(max(self.serial.in_waiting, 1), 65536))
+                if chunk:
+                    self.bytes_received += len(chunk)
+                    if self.record:
+                        self.record.write(chunk)
+                        self.record.flush()
+                    self.pending.put(chunk)
+        except (OSError, serial.SerialException) as error:
+            if not self.stop_reader.is_set():
+                self.error = error
 
     def poll(self, _tick):
         try:
-            waiting = self.serial.in_waiting
-            chunk = self.serial.read(min(max(waiting, 1), 65536))
-            if chunk:
-                self.bytes_received += len(chunk)
-                if self.record:
-                    self.record.write(chunk)
-                    self.record.flush()
+            for _ in range(256):
+                try:
+                    chunk = self.pending.get_nowait()
+                except queue.Empty:
+                    break
                 for frame in self.parser.feed(chunk):
-                    self.update_frame(frame)
+                    try:
+                        self.update_frame(frame)
+                    except (ValueError, IndexError):
+                        self.skipped_payloads += 1
         except (OSError, serial.SerialException, ValueError) as error:
             self.error = error
         self.status.set_text(self._status_text())
@@ -305,6 +330,8 @@ class LiveViewer:
             self.depth_line.set_data(angles, depth)
 
     def close(self, _event=None):
+        self.stop_reader.set()
+        self.reader.join(timeout=1.0)
         if self.serial.is_open:
             self.serial.close()
         if self.record and not self.record.closed:
