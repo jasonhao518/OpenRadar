@@ -34,7 +34,7 @@ def build_parser():
     )
     parser.add_argument("--command-timeout", type=float, default=2.0)
     parser.add_argument(
-        "--view", choices=("points", "range", "both", "depth", "all"),
+        "--view", choices=("points", "range", "both", "depth", "depth3d", "all"),
         default="both",
     )
     parser.add_argument("--limit", type=float, default=5.0, help="point-cloud axis limit in metres")
@@ -144,13 +144,28 @@ class LiveViewer:
 
         show_points = args.view in ("points", "both", "all")
         show_range = args.view in ("range", "both", "all")
-        show_depth = args.view in ("depth", "all")
-        panel_count = sum((show_points, show_range, show_depth))
-        self.figure, axes = plt.subplots(1, panel_count, squeeze=False)
-        axes = iter(axes[0])
-        self.point_axis = next(axes) if show_points else None
-        self.range_axis = next(axes) if show_range else None
-        self.depth_axis = next(axes) if show_depth else None
+        show_depth = args.view in ("depth", "depth3d", "all")
+        show_3d = args.view in ("depth3d", "all")
+        panel_count = sum((show_points, show_range, show_depth, show_3d))
+        self.figure = plt.figure(figsize=(6 * panel_count, 6))
+        panel = iter(range(1, panel_count + 1))
+        self.point_axis = self.figure.add_subplot(1, panel_count, next(panel)) if show_points else None
+        self.range_axis = self.figure.add_subplot(1, panel_count, next(panel)) if show_range else None
+        self.depth_axis = self.figure.add_subplot(1, panel_count, next(panel)) if show_depth else None
+        self.cloud_axis = self.figure.add_subplot(1, panel_count, next(panel), projection="3d") if show_3d else None
+        self.cloud_scatter = None
+        if self.cloud_axis is not None:
+            self.cloud_scatter = self.cloud_axis.scatter(
+                [], [], [], c=[], s=25, vmin=0, vmax=40, cmap="viridis"
+            )
+            self.cloud_axis.set(
+                xlabel="x / lateral (m)", ylabel="y / forward (m)",
+                zlabel="z / height (m)", xlim=(-args.limit, args.limit),
+                ylim=(0, args.max_range), zlim=(-args.limit, args.limit),
+                title="3D detected point cloud (TLV 301)",
+            )
+            self.cloud_axis.view_init(elev=20, azim=-65)
+            self.figure.colorbar(self.cloud_scatter, ax=self.cloud_axis, pad=0.1).set_label("SNR (dB)")
         self.figure.canvas.manager.set_window_title("OpenRadar TI UART live viewer")
         self.figure.canvas.mpl_connect("close_event", self.close)
 
@@ -261,7 +276,7 @@ class LiveViewer:
         return tuple(
             artist for artist in (
                 self.scatter, self.range_line, self.depth_image,
-                self.depth_line, self.status,
+                self.depth_line, self.cloud_scatter, self.status,
             )
             if artist is not None
         )
@@ -269,6 +284,15 @@ class LiveViewer:
     def update_frame(self, frame):
         self.frames_received += 1
         self.last_frame = frame.header.frame_number
+
+        if self.cloud_scatter is not None:
+            if frame.payloads(TI_TLV_DETECTED_POINTS):
+                points = frame.point_cloud()
+                self.cloud_scatter._offsets3d = (points["x"], points["y"], points["z"])
+                self.cloud_scatter.set_array(points["snr"])
+            else:
+                self.cloud_scatter._offsets3d = ([], [], [])
+                self.cloud_scatter.set_array(np.empty(0))
 
         if self.scatter is not None:
             if frame.payloads(TI_TLV_DETECTED_POINTS):
