@@ -22,6 +22,7 @@ from openradar_ti_uart import (
     TI_UART_POINT_UNITS,
     TI_UART_COMPRESSED_POINT,
     TI_UART_TLV_HEADER,
+    TIUARTStreamParser,
     load_adc_frames,
     load_range_profiles,
     load_ti_uart_frames,
@@ -88,6 +89,17 @@ class TIUARTTest(unittest.TestCase):
         packet = make_packet(1, [(TI_TLV_RANGE_PROFILE_MAJOR, b"\0" * 16)])
         with self.assertRaises(ValueError):
             load_ti_uart_frames(packet[:-1], strict=True)
+
+    def test_incremental_stream_parser(self):
+        first = make_packet(21, [(TI_TLV_RANGE_PROFILE_MAJOR, b"\1\0\0\0")])
+        second = make_packet(22, [(TI_TLV_RANGE_PROFILE_MAJOR, b"\2\0\0\0")])
+        stream = b"old CLI text" + first + second
+        parser = TIUARTStreamParser()
+        decoded = []
+        for index in range(0, len(stream), 13):
+            decoded.extend(parser.feed(stream[index:index + 13]))
+        self.assertEqual([frame.header.frame_number for frame in decoded], [21, 22])
+        self.assertEqual(parser.buffered_bytes, 0)
 
 
 if __name__ == "__main__":

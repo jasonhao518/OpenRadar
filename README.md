@@ -100,6 +100,28 @@ python demo/visualizer/ti_uart_tlv.py /path/to/capture.bin --view range
 python demo/visualizer/ti_uart_tlv.py /path/to/capture.bin --view points
 ```
 
+For a radar that is already configured and streaming TI UART TLVs, launch the
+live point-cloud and range-profile UI with:
+
+```bash
+python demo/visualizer/ti_uart_live.py \
+  --port /dev/cu.SLAB_USBtoUART --baud 128000 --view both
+```
+
+To configure a reset IWRL6432 first, provide the `.cfg`. The program opens the
+CLI at 115200, sends every command, follows the config's `baudRate` switch, and
+then starts parsing binary TLVs immediately after `sensorStart`:
+
+```bash
+python demo/visualizer/ti_uart_live.py \
+  --port /dev/cu.SLAB_USBtoUART \
+  --config /path/to/high_accuracy_demo_xwrl64xx.cfg \
+  --view both
+```
+
+Add `--record capture.bin` to save the exact received byte stream while it is
+being displayed. The live viewer does not configure or start the radar.
+
 ## Citation
 
 Please cite OpenRadar in your publications if it helps your research. Here is an example BibTeX entry:

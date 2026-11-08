@@ -215,6 +215,51 @@ def load_ti_uart_frames(source: Source, strict: bool = False) -> List[TIUARTFram
     return list(iter_ti_uart_frames(source, strict=strict))
 
 
+class TIUARTStreamParser:
+    """Incrementally decode arbitrarily chunked TI UART byte streams."""
+
+    def __init__(self):
+        self._buffer = bytearray()
+
+    @property
+    def buffered_bytes(self) -> int:
+        return len(self._buffer)
+
+    def reset(self) -> None:
+        self._buffer.clear()
+
+    def feed(self, data: Union[bytes, bytearray, memoryview]) -> List[TIUARTFrame]:
+        if data:
+            self._buffer.extend(data)
+        frames: List[TIUARTFrame] = []
+        while True:
+            start = self._buffer.find(TI_UART_MAGIC)
+            if start < 0:
+                # Keep a possible partial magic word spanning two serial reads.
+                keep = min(len(self._buffer), len(TI_UART_MAGIC) - 1)
+                if len(self._buffer) > keep:
+                    del self._buffer[:-keep]
+                break
+            if start:
+                del self._buffer[:start]
+            if len(self._buffer) < TI_UART_HEADER.size:
+                break
+            values = TI_UART_HEADER.unpack_from(self._buffer)
+            total_length = values[2]
+            if total_length < TI_UART_HEADER.size or total_length > _MAX_PACKET_SIZE:
+                del self._buffer[0]
+                continue
+            if len(self._buffer) < total_length:
+                break
+            packet = bytes(self._buffer[:total_length])
+            del self._buffer[:total_length]
+            parsed = load_ti_uart_frames(packet, strict=True)
+            if len(parsed) != 1:
+                raise ValueError("complete serial packet did not decode to one frame")
+            frames.append(parsed[0])
+        return frames
+
+
 def load_range_profiles(
     source: Source, tlv_type: int = TI_TLV_RANGE_PROFILE_MAJOR
 ) -> Tuple[np.ndarray, np.ndarray]:
