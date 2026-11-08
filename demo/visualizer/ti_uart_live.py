@@ -128,6 +128,8 @@ class LiveViewer:
         self.scatter = None
         if self.point_axis is not None:
             self.scatter = self.point_axis.scatter([], [], c=[], s=40, vmin=0, vmax=40)
+            colorbar = self.figure.colorbar(self.scatter, ax=self.point_axis, pad=0.02)
+            colorbar.set_label("SNR (dB)")
             self.point_axis.set(
                 xlabel="x (m)", ylabel="y (m)",
                 xlim=(-args.limit, args.limit), ylim=(0, args.limit),
