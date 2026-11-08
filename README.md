@@ -78,6 +78,28 @@ adc_data = dca.read()
 radar_cube = mm.dsp.range_processing(adc_data)
 ```
 
+### TI UART TLV capture playback (IWRL6432)
+
+`mmwave.dataloader.ti_uart` parses offline captures using TI's UART magic word,
+40-byte header and TLV framing. It supports compressed point clouds (TLV 301),
+major/minor range profiles (TLV 302/303), and the IWRL6432 raw ADC extension
+with metadata TLV 1100 plus ADC TLV 316.
+
+```python
+from mmwave.dataloader.ti_uart import load_adc_frames, load_range_profiles
+
+frame_numbers, profiles = load_range_profiles("capture.bin")
+frame_numbers, adc_frames = load_adc_frames("raw_adc_capture.bin")
+# adc_frames[0].shape == (chirps, rx_antennas, adc_samples)
+```
+
+Replay a file with an interactive frame slider:
+
+```bash
+python demo/visualizer/ti_uart_tlv.py /path/to/capture.bin --view range
+python demo/visualizer/ti_uart_tlv.py /path/to/capture.bin --view points
+```
+
 ## Citation
 
 Please cite OpenRadar in your publications if it helps your research. Here is an example BibTeX entry:
