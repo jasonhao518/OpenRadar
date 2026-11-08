@@ -16,6 +16,7 @@ from openradar_ti_uart import (
     TI_TLV_CAPTURE_METADATA,
     TI_TLV_DETECTED_POINTS,
     TI_TLV_RANGE_PROFILE_MAJOR,
+    TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR,
     TI_UART_CAPTURE_METADATA,
     TI_UART_HEADER,
     TI_UART_MAGIC,
@@ -67,6 +68,15 @@ class TIUARTTest(unittest.TestCase):
         np.testing.assert_allclose(points["x"], [1.0, -1.0])
         np.testing.assert_allclose(points["velocity"], [0.3, -0.2])
         np.testing.assert_array_equal(points["mode"], [0, 1])
+
+    def test_range_azimuth_heatmap(self):
+        heatmap = np.arange(24, dtype="<u4").reshape(3, 8)
+        frame = load_ti_uart_frames(
+            make_packet(10, [(TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR, heatmap.tobytes())])
+        )[0]
+        np.testing.assert_array_equal(frame.range_azimuth_heatmap(8), heatmap)
+        with self.assertRaises(ValueError):
+            frame.range_azimuth_heatmap(7)
 
     def test_iwrl6432_raw_adc_shape(self):
         adc = np.arange(-18, 18, dtype="<i2").reshape(2, 3, 6)

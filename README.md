@@ -82,8 +82,9 @@ radar_cube = mm.dsp.range_processing(adc_data)
 
 `mmwave.dataloader.ti_uart` parses offline captures using TI's UART magic word,
 40-byte header and TLV framing. It supports compressed point clouds (TLV 301),
-major/minor range profiles (TLV 302/303), and the IWRL6432 raw ADC extension
-with metadata TLV 1100 plus ADC TLV 316.
+major/minor range profiles (TLV 302/303), major/minor range-azimuth heatmaps
+(TLV 304/305), and the IWRL6432 raw ADC extension with metadata TLV 1100 plus
+ADC TLV 316.
 
 ```python
 from mmwave.dataloader.ti_uart import load_adc_frames, load_range_profiles
@@ -120,7 +121,18 @@ python demo/visualizer/ti_uart_live.py \
 ```
 
 Add `--record capture.bin` to save the exact received byte stream while it is
-being displayed. The live viewer does not configure or start the radar.
+being displayed. When `--config` is omitted, the live viewer does not configure
+or start the radar.
+
+For a dense range-azimuth view from a multi-antenna configuration that emits
+TLV 304, use the FFT width and range-bin scale matching the radar profile:
+
+```bash
+python demo/visualizer/ti_uart_live.py \
+  --port /dev/cu.SLAB_USBtoUART \
+  --config /path/to/openradar_depth_map_2tx3rx_xwrl6432.cfg \
+  --view depth --azimuth-bins 32 --range-resolution 0.1953125
+```
 
 ## Citation
 

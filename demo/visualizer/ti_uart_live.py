@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live TI UART point-cloud and range-profile viewer."""
+"""Live TI UART point-cloud, range-profile, and depth-map viewer."""
 
 import argparse
 import time
@@ -12,6 +12,7 @@ from matplotlib.animation import FuncAnimation
 
 from mmwave.dataloader.ti_uart import (
     TI_TLV_DETECTED_POINTS,
+    TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR,
     TI_TLV_RANGE_PROFILE_MAJOR,
     TIUARTStreamParser,
 )
@@ -30,8 +31,27 @@ def build_parser():
         help="send a TI .cfg at --cli-baud before starting the live view",
     )
     parser.add_argument("--command-timeout", type=float, default=2.0)
-    parser.add_argument("--view", choices=("points", "range", "both"), default="both")
+    parser.add_argument(
+        "--view", choices=("points", "range", "both", "depth", "all"),
+        default="both",
+    )
     parser.add_argument("--limit", type=float, default=5.0, help="point-cloud axis limit in metres")
+    parser.add_argument(
+        "--azimuth-bins", type=int, default=32,
+        help="azimuth FFT width in TLV 304 (default: 32)",
+    )
+    parser.add_argument(
+        "--range-resolution", type=float, default=0.1953125,
+        help="metres per range bin for depth view (default: 0.1953125)",
+    )
+    parser.add_argument(
+        "--min-range", type=float, default=0.25,
+        help="ignore nearer bins in derived depth profile (default: 0.25 m)",
+    )
+    parser.add_argument(
+        "--max-range", type=float, default=10.0,
+        help="depth-view range limit (default: 10 m)",
+    )
     parser.add_argument("--interval", type=int, default=50, help="UI refresh interval in ms")
     parser.add_argument("--record", type=Path, help="also save received bytes to this file")
     return parser
@@ -114,14 +134,15 @@ class LiveViewer:
         self.last_frame = None
         self.error = None
 
-        if args.view == "both":
-            self.figure, (self.point_axis, self.range_axis) = plt.subplots(1, 2)
-        elif args.view == "points":
-            self.figure, self.point_axis = plt.subplots()
-            self.range_axis = None
-        else:
-            self.figure, self.range_axis = plt.subplots()
-            self.point_axis = None
+        show_points = args.view in ("points", "both", "all")
+        show_range = args.view in ("range", "both", "all")
+        show_depth = args.view in ("depth", "all")
+        panel_count = sum((show_points, show_range, show_depth))
+        self.figure, axes = plt.subplots(1, panel_count, squeeze=False)
+        axes = iter(axes[0])
+        self.point_axis = next(axes) if show_points else None
+        self.range_axis = next(axes) if show_range else None
+        self.depth_axis = next(axes) if show_depth else None
         self.figure.canvas.manager.set_window_title("OpenRadar TI UART live viewer")
         self.figure.canvas.mpl_connect("close_event", self.close)
 
@@ -147,6 +168,30 @@ class LiveViewer:
                 title="Major range profile (TLV 302)",
             )
             self.range_axis.grid(alpha=0.25)
+
+        self.depth_image = None
+        self.depth_line = None
+        if self.depth_axis is not None:
+            self.depth_image = self.depth_axis.imshow(
+                np.zeros((2, args.azimuth_bins)),
+                origin="lower",
+                aspect="auto",
+                cmap="turbo",
+                extent=(-90, 90, 0, args.max_range),
+            )
+            (self.depth_line,) = self.depth_axis.plot(
+                [], [], color="white", linewidth=1.5, label="strongest return"
+            )
+            self.depth_axis.set(
+                xlabel="Azimuth angle (deg)", ylabel="Range / depth (m)",
+                xlim=(-90, 90), ylim=(0, args.max_range),
+                title="Dense range-azimuth depth view (TLV 304)",
+            )
+            self.depth_axis.legend(loc="upper right")
+            colorbar = self.figure.colorbar(
+                self.depth_image, ax=self.depth_axis, pad=0.02
+            )
+            colorbar.set_label("log(1 + return intensity)")
 
         self.status = self.figure.suptitle(self._status_text())
         self.figure.tight_layout(rect=(0, 0, 1, 0.94))
@@ -189,7 +234,10 @@ class LiveViewer:
     @property
     def artists(self):
         return tuple(
-            artist for artist in (self.scatter, self.range_line, self.status)
+            artist for artist in (
+                self.scatter, self.range_line, self.depth_image,
+                self.depth_line, self.status,
+            )
             if artist is not None
         )
 
@@ -216,6 +264,46 @@ class LiveViewer:
             if target_top > current_top or target_top < current_top * 0.5:
                 self.range_axis.set_ylim(0, target_top)
 
+        if (
+            self.depth_image is not None
+            and frame.payloads(TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR)
+        ):
+            heatmap = frame.range_azimuth_heatmap(self.args.azimuth_bins)
+            # TI emits unshifted FFT bins. Center broadside for a conventional
+            # left-to-right -90..+90 degree depth image.
+            heatmap = np.fft.fftshift(heatmap, axes=1)
+            image = np.log1p(heatmap.astype(np.float64))
+            range_max = min(
+                self.args.max_range,
+                (heatmap.shape[0] - 1) * self.args.range_resolution,
+            )
+            max_row = min(
+                heatmap.shape[0],
+                int(self.args.max_range / self.args.range_resolution) + 1,
+            )
+            min_row = min(
+                max_row - 1,
+                max(0, int(self.args.min_range / self.args.range_resolution)),
+            )
+            visible = image[:max_row]
+            self.depth_image.set_data(visible)
+            self.depth_image.set_extent((-90, 90, 0, range_max))
+            finite = visible[np.isfinite(visible)]
+            if finite.size:
+                low, high = np.percentile(finite, (10, 99.5))
+                if high > low:
+                    self.depth_image.set_clim(low, high)
+
+            candidates = heatmap[min_row:max_row]
+            peak_rows = np.argmax(candidates, axis=0) + min_row
+            depth = peak_rows.astype(float) * self.args.range_resolution
+            spatial_frequency = (
+                np.arange(-self.args.azimuth_bins // 2, self.args.azimuth_bins // 2)
+                * (2.0 / self.args.azimuth_bins)
+            )
+            angles = np.degrees(np.arcsin(spatial_frequency))
+            self.depth_line.set_data(angles, depth)
+
     def close(self, _event=None):
         if self.serial.is_open:
             self.serial.close()
@@ -233,6 +321,12 @@ def main():
     args = build_parser().parse_args()
     if args.limit <= 0:
         raise SystemExit("--limit must be positive")
+    if args.azimuth_bins <= 0:
+        raise SystemExit("--azimuth-bins must be positive")
+    if args.range_resolution <= 0:
+        raise SystemExit("--range-resolution must be positive")
+    if args.min_range < 0 or args.max_range <= args.min_range:
+        raise SystemExit("require 0 <= --min-range < --max-range")
     LiveViewer(args).run()
 
 

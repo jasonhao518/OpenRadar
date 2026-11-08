@@ -24,6 +24,8 @@ TI_UART_COMPRESSED_POINT = struct.Struct("<hhhhBB")
 TI_TLV_DETECTED_POINTS = 301
 TI_TLV_RANGE_PROFILE_MAJOR = 302
 TI_TLV_RANGE_PROFILE_MINOR = 303
+TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR = 304
+TI_TLV_RANGE_AZIMUTH_HEATMAP_MINOR = 305
 TI_TLV_STATS = 306
 TI_TLV_ADC_SAMPLES = 316
 TI_TLV_CAPTURE_METADATA = 1100
@@ -78,6 +80,26 @@ class TIUARTFrame:
         if len(payload) % 4:
             raise ValueError("range-profile payload is not uint32 aligned")
         return np.frombuffer(payload, dtype="<u4").copy()
+
+    def range_azimuth_heatmap(
+        self,
+        num_azimuth_bins: int,
+        tlv_type: int = TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR,
+    ) -> np.ndarray:
+        """Return a TI xWRL range-azimuth heatmap as [range, azimuth]."""
+        if num_azimuth_bins <= 0:
+            raise ValueError("num_azimuth_bins must be positive")
+        payload = self.payload(tlv_type)
+        row_size = num_azimuth_bins * np.dtype("<u4").itemsize
+        if len(payload) == 0 or len(payload) % row_size:
+            raise ValueError(
+                "range-azimuth payload size is not divisible by {} azimuth bins".format(
+                    num_azimuth_bins
+                )
+            )
+        return np.frombuffer(payload, dtype="<u4").reshape(
+            -1, num_azimuth_bins
+        ).copy()
 
     def point_cloud(self) -> np.ndarray:
         """Return compressed TLV 301 as x/y/z/velocity/SNR/noise floats."""
