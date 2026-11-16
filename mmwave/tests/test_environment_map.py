@@ -13,7 +13,7 @@ class MapTest(unittest.TestCase):
     def test_window_expires_old_returns_exactly(self):
         mapper = module.ReflectionMap(history=30, fps=4)
         power = np.ones((64, 32))*100
-        power[10, 0] = 10000
+        power[10, 16] = 10000
         mapper.update(power, 1)
         self.assertGreater(mapper.evidence.max(), 0)
         mapper.update(np.ones((64, 32))*100, 120)
@@ -25,7 +25,7 @@ class MapTest(unittest.TestCase):
     def test_static_return_accumulates_then_fades(self):
         mapper = module.ReflectionMap(history=2, fps=4)
         power = np.ones((64, 32)) * 100
-        power[10, 0] = 10000  # broadside, approximately 1.95 m
+        power[10, 16] = 10000  # broadside is the centre column, approximately 1.95 m
         for number in range(40):
             mapper.update(power, number)
         row, col = np.unravel_index(mapper.evidence.argmax(), mapper.evidence.shape)
@@ -42,7 +42,7 @@ class MapTest(unittest.TestCase):
     def test_positive_azimuth_maps_right(self):
         mapper = module.ReflectionMap(history=1)
         power = np.ones((64, 32))*100
-        power[20, 8] = 10000  # sin(theta) = +0.5
+        power[20, 24] = 10000  # sin(theta) = +0.5
         for number in range(20):
             mapper.update(power, number)
         row, col = np.unravel_index(mapper.evidence.argmax(), mapper.evidence.shape)

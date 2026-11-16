@@ -1,6 +1,7 @@
 """Fixed radar reflection evidence map; unseen cells remain unknown.
 
-Input is the unshifted TI range-azimuth power matrix. This is a horizontal
+Input is the TI range-azimuth power matrix as transmitted in TLV 304/305:
+the azimuth axis is already centred (column N/2 is broadside). This is a horizontal
 projection, not an elevation-resolved floor plan or calibrated occupancy.
 """
 import numpy as np
@@ -35,7 +36,7 @@ class ReflectionMap:
         self.hit_counts.fill(0)
 
     def update(self, heatmap, frame_number, min_range=0.25):
-        power = np.fft.fftshift(np.asarray(heatmap, dtype=float), axes=1)
+        power = np.asarray(heatmap, dtype=float)
         if power.ndim != 2 or min(power.shape) < 3:
             raise ValueError("expected a range-by-azimuth power matrix")
         nr, na = power.shape

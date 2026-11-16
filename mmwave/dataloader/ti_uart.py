@@ -20,6 +20,15 @@ TI_UART_TLV_HEADER = struct.Struct("<II")
 TI_UART_CAPTURE_METADATA = struct.Struct("<I8HI")
 TI_UART_POINT_UNITS = struct.Struct("<4f2H")
 TI_UART_COMPRESSED_POINT = struct.Struct("<hhhhBB")
+# trackerProc_Target: tid, pos xyz, vel xyz, acc xyz, 4x4 error covariance,
+# gating gain, confidence level.
+TI_UART_TARGET_DTYPE = np.dtype([
+    ("tid", "<u4"),
+    ("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+    ("vx", "<f4"), ("vy", "<f4"), ("vz", "<f4"),
+    ("ax", "<f4"), ("ay", "<f4"), ("az", "<f4"),
+    ("ec", "<f4", (16,)), ("g", "<f4"), ("confidence", "<f4"),
+])
 
 TI_TLV_DETECTED_POINTS = 301
 TI_TLV_RANGE_PROFILE_MAJOR = 302
@@ -27,6 +36,8 @@ TI_TLV_RANGE_PROFILE_MINOR = 303
 TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR = 304
 TI_TLV_RANGE_AZIMUTH_HEATMAP_MINOR = 305
 TI_TLV_STATS = 306
+TI_TLV_TARGET_LIST = 308
+TI_TLV_TARGET_INDEX = 309
 TI_TLV_ADC_SAMPLES = 316
 TI_TLV_CAPTURE_METADATA = 1100
 
@@ -86,7 +97,12 @@ class TIUARTFrame:
         num_azimuth_bins: int,
         tlv_type: int = TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR,
     ) -> np.ndarray:
-        """Return a TI xWRL range-azimuth heatmap as [range, azimuth]."""
+        """Return a TI xWRL range-azimuth heatmap as [range, azimuth].
+
+        The firmware emits the azimuth axis already centred: column N/2 is
+        broadside and column k corresponds to sin(azimuth) = 2 * (k - N/2) / N.
+        Do not apply an additional fftshift.
+        """
         if num_azimuth_bins <= 0:
             raise ValueError("num_azimuth_bins must be positive")
         payload = self.payload(tlv_type)
@@ -137,6 +153,16 @@ class TIUARTFrame:
                 0 if index < major_count else 1,
             )
         return points
+
+    def targets(self) -> np.ndarray:
+        """Return the firmware (gtrack) target list, TLV 308; empty if absent."""
+        payloads = self.payloads(TI_TLV_TARGET_LIST)
+        if not payloads:
+            return np.zeros(0, dtype=TI_UART_TARGET_DTYPE)
+        payload = payloads[0]
+        if len(payload) % TI_UART_TARGET_DTYPE.itemsize:
+            raise ValueError("target-list payload is not a whole number of targets")
+        return np.frombuffer(payload, dtype=TI_UART_TARGET_DTYPE).copy()
 
     def capture_metadata(self) -> TIUARTCaptureMetadata:
         payload = self.payload(TI_TLV_CAPTURE_METADATA)

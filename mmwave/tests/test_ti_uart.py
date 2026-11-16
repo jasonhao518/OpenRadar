@@ -17,6 +17,8 @@ from openradar_ti_uart import (
     TI_TLV_DETECTED_POINTS,
     TI_TLV_RANGE_PROFILE_MAJOR,
     TI_TLV_RANGE_AZIMUTH_HEATMAP_MAJOR,
+    TI_TLV_TARGET_LIST,
+    TI_UART_TARGET_DTYPE,
     TI_UART_CAPTURE_METADATA,
     TI_UART_HEADER,
     TI_UART_MAGIC,
@@ -77,6 +79,23 @@ class TIUARTTest(unittest.TestCase):
         np.testing.assert_array_equal(frame.range_azimuth_heatmap(8), heatmap)
         with self.assertRaises(ValueError):
             frame.range_azimuth_heatmap(7)
+
+    def test_firmware_target_list(self):
+        self.assertEqual(TI_UART_TARGET_DTYPE.itemsize, 112)
+        targets = np.zeros(2, dtype=TI_UART_TARGET_DTYPE)
+        targets["tid"] = [0, 3]
+        targets["x"] = [-1.0, 0.5]
+        targets["y"] = [2.0, 4.0]
+        targets["vy"] = [0.0, -0.7]
+        frame = load_ti_uart_frames(
+            make_packet(11, [(TI_TLV_TARGET_LIST, targets.tobytes())])
+        )[0]
+        decoded = frame.targets()
+        np.testing.assert_array_equal(decoded["tid"], [0, 3])
+        np.testing.assert_allclose(decoded["y"], [2.0, 4.0])
+        np.testing.assert_allclose(decoded["vy"], [0.0, -0.7])
+        empty = load_ti_uart_frames(make_packet(12, [(302, b"\0" * 4)]))[0]
+        self.assertEqual(len(empty.targets()), 0)
 
     def test_iwrl6432_raw_adc_shape(self):
         adc = np.arange(-18, 18, dtype="<i2").reshape(2, 3, 6)
